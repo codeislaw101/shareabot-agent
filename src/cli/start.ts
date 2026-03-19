@@ -3,7 +3,7 @@
  */
 
 import { loadConfig } from "../config/loader.js";
-import { loadTools } from "../tools/index.js";
+import { loadTools, registry } from "../tools/index.js";
 import { PlatformConnection } from "../transport/connection.js";
 
 export async function startCommand(): Promise<void> {
@@ -62,13 +62,14 @@ export async function startCommand(): Promise<void> {
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
 
-  // Keep alive
+  // Reset daily tool usage at midnight UTC
+  let lastResetDay = new Date().getUTCDate();
   setInterval(() => {
-    // Reset daily tool usage at midnight UTC
     const now = new Date();
-    if (now.getUTCHours() === 0 && now.getUTCMinutes() === 0) {
-      const { registry } = require("../tools/index.js");
+    if (now.getUTCDate() !== lastResetDay) {
+      lastResetDay = now.getUTCDate();
       registry.resetDailyUsage();
+      console.log("[agent] daily tool budget reset");
     }
   }, 60000);
 }

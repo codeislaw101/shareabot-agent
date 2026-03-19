@@ -21,8 +21,9 @@ async function executeFileWrite(input: ToolInput, ctx: ToolContext): Promise<Too
     return { success: false, result: "", error: "Invalid filename: path traversal blocked", durationMs: 0 };
   }
 
-  const filePath = path.join(ctx.workDir, normalized);
-  if (!filePath.startsWith(ctx.workDir)) {
+  const filePath = path.resolve(ctx.workDir, normalized);
+  const rel = path.relative(ctx.workDir, filePath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return { success: false, result: "", error: "Invalid filename: outside workspace", durationMs: 0 };
   }
 
@@ -62,8 +63,9 @@ async function executeFileRead(input: ToolInput, ctx: ToolContext): Promise<Tool
     return { success: false, result: "", error: "Invalid filename", durationMs: 0 };
   }
 
-  const filePath = path.join(ctx.workDir, normalized);
-  if (!filePath.startsWith(ctx.workDir)) {
+  const filePath = path.resolve(ctx.workDir, normalized);
+  const rel = path.relative(ctx.workDir, filePath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
     return { success: false, result: "", error: "Outside workspace", durationMs: 0 };
   }
 

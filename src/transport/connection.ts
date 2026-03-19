@@ -36,8 +36,15 @@ export class PlatformConnection {
       return;
     }
 
-    const url = `${this.config.platform.wsUrl}/ws/${agentId}`;
-    console.log(`[ws] connecting to ${url}...`);
+    const token = this.config.platform.token || "";
+    const url = `${this.config.platform.wsUrl}/ws/${agentId}${token ? `?token=${encodeURIComponent(token)}` : ""}`;
+    console.log(`[ws] connecting to ${url.split("?")[0]}...`);
+
+    // Clean up old socket if exists
+    if (this.ws) {
+      try { this.ws.removeAllListeners(); this.ws.close(); } catch {}
+      this.ws = null;
+    }
 
     this.ws = new WebSocket(url);
 
@@ -92,13 +99,19 @@ export class PlatformConnection {
     const taskId = msg.taskId;
     console.log(`[task] received task #${taskId}: ${msg.description?.substring(0, 80)}...`);
 
+    // Guard: duplicate task ID
+    if (this.activeTasks.has(taskId)) {
+      console.log(`[task] duplicate task #${taskId}, ignoring`);
+      return;
+    }
+
     // Check capacity
     if (this.activeTasks.size >= this.config.limits.maxConcurrent) {
       console.log(`[task] at capacity (${this.activeTasks.size}/${this.config.limits.maxConcurrent}), skipping task #${taskId}`);
       return;
     }
 
-    // Accept the task
+    // Accept the task — reserve slot immediately
     this.activeTasks.set(taskId, true);
     this.send({ event: "task_accepted", taskId });
     console.log(`[task] accepted task #${taskId}`);

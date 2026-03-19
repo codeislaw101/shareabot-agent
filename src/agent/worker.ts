@@ -13,7 +13,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import path from "node:path";
 import os from "node:os";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { registry, type ToolOutput } from "../tools/registry.js";
 import type { AgentConfig } from "../config/schema.js";
 
@@ -52,8 +53,8 @@ export async function executeTask(
   const client = new Anthropic({ apiKey: config.agent.apiKey });
   const model = config.agent.model;
 
-  // Create isolated workspace for this task
-  const workDir = path.join(os.tmpdir(), "shareabot-tasks", String(task.taskId));
+  // Create isolated workspace with random UUID (prevents taskId collision attacks)
+  const workDir = path.join(os.tmpdir(), "shareabot-tasks", `${task.taskId}-${randomUUID().slice(0, 8)}`);
   await mkdir(workDir, { recursive: true });
 
   const toolDefs = registry.toClaudeTools();

@@ -56,12 +56,20 @@ export function saveConfig(config: AgentConfig): void {
 }
 
 export function saveConfigFull(config: AgentConfig): void {
-  fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  fs.writeFileSync(CONFIG_FILE, stringifyYaml(config), "utf-8");
+  fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 });
+  // Redact secrets — store only non-sensitive config. Secrets come from env vars.
+  const safe = structuredClone(config);
+  if (safe.agent.apiKey) safe.agent.apiKey = "***";
+  if (safe.platform.password) safe.platform.password = "***";
+  // Keep token for WS auth (it's a session JWT, not a long-lived credential)
+  fs.writeFileSync(CONFIG_FILE, stringifyYaml(safe), { encoding: "utf-8", mode: 0o600 });
 }
+
+const BLOCKED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 function deepMerge(target: Record<string, any>, source: Record<string, any>): void {
   for (const key of Object.keys(source)) {
+    if (BLOCKED_KEYS.has(key)) continue;
     if (source[key] && typeof source[key] === "object" && !Array.isArray(source[key])) {
       if (!target[key]) target[key] = {};
       deepMerge(target[key], source[key]);

@@ -17,9 +17,19 @@ async function executeCode(input: ToolInput, ctx: ToolContext): Promise<ToolOutp
     return { success: false, result: "", error: "No code provided", durationMs: 0 };
   }
 
+  // Security: prevent path traversal
+  const normalized = path.normalize(filename);
+  if (normalized.startsWith("..") || path.isAbsolute(normalized)) {
+    return { success: false, result: "", error: "Invalid filename: path traversal blocked", durationMs: 0 };
+  }
+
   // Write code to workspace
   await mkdir(ctx.workDir, { recursive: true });
-  const filePath = path.join(ctx.workDir, filename);
+  const filePath = path.resolve(ctx.workDir, normalized);
+  const rel = path.relative(ctx.workDir, filePath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return { success: false, result: "", error: "Invalid filename: outside workspace", durationMs: 0 };
+  }
   await writeFile(filePath, code, "utf-8");
 
   ctx.onProgress("executing", `Running ${language} code...`);
@@ -56,12 +66,13 @@ async function executeCode(input: ToolInput, ctx: ToolContext): Promise<ToolOutp
       timeout,
       maxBuffer: ctx.maxOutputSize,
       env: {
-        ...process.env,
-        // Sandbox: remove sensitive env vars
-        ANTHROPIC_API_KEY: "",
-        SHAREABOT_PASSWORD: "",
+        // Allowlist: only safe env vars — no secrets leak
+        PATH: process.env.PATH || "",
         HOME: ctx.workDir,
         TMPDIR: ctx.workDir,
+        TEMP: ctx.workDir,
+        LANG: process.env.LANG || "en_US.UTF-8",
+        NODE_ENV: "sandbox",
       },
     }, (err, stdout, stderr) => {
       if (err) {
