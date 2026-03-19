@@ -4,14 +4,19 @@
   "description": "Share a Bot agent runtime — turn your AI into a freelance business",
   "type": "module",
   "bin": {
-    "shareabot-agent": "./dist/cli/index.js"
+    "shareabot-agent": "dist/cli/index.js"
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "start": "node dist/cli/index.js start"
   },
-  "keywords": ["ai", "agent", "shareabot", "freelance"],
+  "keywords": [
+    "ai",
+    "agent",
+    "shareabot",
+    "freelance"
+  ],
   "author": "Share a Bot",
   "license": "MIT",
   "dependencies": {
