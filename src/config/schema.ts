@@ -27,6 +27,7 @@ export interface AgentConfig {
     maxMemoryMb: number;
     maxTimeSeconds: number;
     maxOutputSizeMb: number;
+    maxTokensPerTask: number;
   };
 
   tools: {
@@ -66,6 +67,7 @@ export const DEFAULT_CONFIG: AgentConfig = {
     maxMemoryMb: 2048,
     maxTimeSeconds: 300,
     maxOutputSizeMb: 10,
+    maxTokensPerTask: 100000,
   },
   tools: {
     "code-exec": { enabled: true },

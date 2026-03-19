@@ -57,6 +57,22 @@ export async function executeTask(
   const workDir = path.join(os.tmpdir(), "shareabot-tasks", `${task.taskId}-${randomUUID().slice(0, 8)}`);
   await mkdir(workDir, { recursive: true });
 
+  try {
+  return await _executeInWorkspace(task, config, onProgress, client, model, workDir);
+  } finally {
+    // Cleanup workspace
+    rm(workDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function _executeInWorkspace(
+  task: TaskData,
+  config: AgentConfig,
+  onProgress: ProgressCallback,
+  client: InstanceType<typeof Anthropic>,
+  model: string,
+  workDir: string,
+): Promise<Deliverable> {
   const toolDefs = registry.toClaudeTools();
   const allArtifacts: Array<{ name: string; content: string; mimeType: string }> = [];
   let totalTokens = 0;
@@ -88,9 +104,16 @@ ${task.context.length > 0 ? `## Context files\n${task.context.map((c) => `### ${
 
   onProgress("thinking", "Analyzing task...");
 
-  const MAX_TURNS = 20; // prevent infinite loops
+  const MAX_TURNS = 20;
+  const maxTokens = config.security.maxTokensPerTask;
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
+    // Check token budget before each LLM call
+    if (totalTokens >= maxTokens) {
+      console.log(`[worker] task ${task.taskId}: token budget exhausted (${totalTokens}/${maxTokens})`);
+      break;
+    }
+
     const response = await client.messages.create({
       model,
       max_tokens: 8000,
