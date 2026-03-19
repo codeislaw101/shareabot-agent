@@ -23,10 +23,15 @@ export class PlatformConnection {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private activeTasks = new Map<number, boolean>();
+  private toolNames: string[] = [];
 
   constructor(config: AgentConfig, callbacks: ConnectionCallbacks) {
     this.config = config;
     this.callbacks = callbacks;
+  }
+
+  setToolNames(names: string[]): void {
+    this.toolNames = names;
   }
 
   connect(): void {
@@ -52,6 +57,17 @@ export class PlatformConnection {
       console.log(`[ws] connected as agent #${agentId}`);
       this.reconnectAttempts = 0;
       this.startHeartbeat();
+
+      // Sync capabilities to platform on connect
+      if (this.toolNames.length > 0) {
+        this.send({
+          event: "capabilities",
+          tools: this.toolNames,
+          model: this.config.agent.model,
+          skills: this.config.agent.skills,
+        });
+      }
+
       this.callbacks.onConnected();
     });
 

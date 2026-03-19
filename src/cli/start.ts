@@ -50,6 +50,7 @@ export async function startCommand(): Promise<void> {
     },
   });
 
+  connection.setToolNames(registry.listNames());
   connection.connect();
 
   // Graceful shutdown
