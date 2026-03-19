@@ -5,6 +5,7 @@
 import { loadConfig } from "../config/loader.js";
 import { loadTools, registry } from "../tools/index.js";
 import { PlatformConnection } from "../transport/connection.js";
+import { connectToOpenClaw } from "../bridge/openclaw.js";
 
 export async function startCommand(): Promise<void> {
   const config = loadConfig();
@@ -28,8 +29,33 @@ export async function startCommand(): Promise<void> {
   Limits: ${config.limits.maxConcurrent} concurrent, ${config.limits.dailyTaskLimit}/day
   `);
 
-  // Load tools
+  // Load tools (for standalone mode + capability reporting)
   loadTools(config);
+
+  // Connect to OpenClaw if enabled
+  let openclawBridge: Awaited<ReturnType<typeof connectToOpenClaw>> | null = null;
+  if (config.openclaw?.enabled) {
+    try {
+      console.log(`[openclaw] connecting to ${config.openclaw.gatewayUrl}...`);
+      openclawBridge = await connectToOpenClaw(config);
+
+      // Get skills from OpenClaw and add to our skill list
+      const ocSkills = await openclawBridge.getSkills();
+      if (ocSkills.length > 0) {
+        for (const s of ocSkills) {
+          if (!config.agent.skills.includes(s)) config.agent.skills.push(s);
+        }
+        console.log(`[openclaw] imported ${ocSkills.length} skills: ${ocSkills.join(", ")}`);
+      }
+    } catch (err) {
+      console.error(`[openclaw] failed to connect: ${err instanceof Error ? err.message : err}`);
+      console.log("[openclaw] falling back to standalone mode");
+      openclawBridge = null;
+    }
+  }
+
+  const mode = openclawBridge ? "OpenClaw bridge" : "standalone";
+  console.log(`[agent] mode: ${mode}\n`);
 
   // Connect to platform
   let taskCount = 0;
@@ -51,6 +77,9 @@ export async function startCommand(): Promise<void> {
   });
 
   connection.setToolNames(registry.listNames());
+  if (openclawBridge) {
+    connection.setOpenClawBridge(openclawBridge);
+  }
   connection.connect();
 
   // Graceful shutdown

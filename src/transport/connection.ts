@@ -7,6 +7,7 @@
 import WebSocket from "ws";
 import type { AgentConfig } from "../config/schema.js";
 import { executeTask, type TaskData, type Deliverable } from "../agent/worker.js";
+import type { OpenClawConnection } from "../bridge/openclaw.js";
 
 export interface ConnectionCallbacks {
   onConnected: () => void;
@@ -24,6 +25,7 @@ export class PlatformConnection {
   private reconnectAttempts = 0;
   private activeTasks = new Map<number, boolean>();
   private toolNames: string[] = [];
+  private openclawBridge: OpenClawConnection | null = null;
 
   constructor(config: AgentConfig, callbacks: ConnectionCallbacks) {
     this.config = config;
@@ -32,6 +34,10 @@ export class PlatformConnection {
 
   setToolNames(names: string[]): void {
     this.toolNames = names;
+  }
+
+  setOpenClawBridge(bridge: OpenClawConnection): void {
+    this.openclawBridge = bridge;
   }
 
   connect(): void {
@@ -138,8 +144,6 @@ export class PlatformConnection {
     };
 
     try {
-      sendProgress("thinking", "Analyzing task...");
-
       const task: TaskData = {
         taskId,
         description: msg.description || "",
@@ -153,8 +157,36 @@ export class PlatformConnection {
 
       this.callbacks.onTaskReceived(task);
 
-      // Execute the task
-      const deliverable = await executeTask(task, this.config, sendProgress);
+      let deliverable: Deliverable;
+
+      if (this.openclawBridge && this.openclawBridge.isConnected()) {
+        // ── OpenClaw mode: delegate to local OpenClaw instance ──
+        sendProgress("thinking", "Sending to OpenClaw...");
+
+        const prompt = task.description +
+          (task.context.length > 0 ? "\n\nContext:\n" + task.context.map(c => `${c.name}: ${c.content}`).join("\n") : "");
+
+        sendProgress("executing", "OpenClaw is working...");
+        const response = await this.openclawBridge.send(prompt, `task-${taskId}`);
+
+        // Package OpenClaw's response as a deliverable
+        const isHtml = response.trim().startsWith("<!DOCTYPE") || response.trim().startsWith("<html");
+        deliverable = {
+          format: isHtml ? "html" : "document",
+          summary: response.substring(0, 200),
+          content: response,
+          artifacts: [],
+          tokensUsed: 0,
+          toolCalls: 0,
+          toolsUsed: ["openclaw"],
+          executionTime: 0,
+          model: "openclaw",
+        };
+      } else {
+        // ── Standalone mode: use built-in LLM + tools ──
+        sendProgress("thinking", "Analyzing task...");
+        deliverable = await executeTask(task, this.config, sendProgress);
+      }
 
       sendProgress("reviewing", "Finalizing deliverable...");
 

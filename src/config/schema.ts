@@ -40,6 +40,12 @@ export interface AgentConfig {
     dailyTaskLimit: number;
     dailyToolBudget: number;    // max tool invocations per day
   };
+
+  openclaw?: {
+    gatewayUrl: string;         // ws://127.0.0.1:18789
+    gatewayToken: string;       // OpenClaw gateway auth token
+    enabled: boolean;           // if true, delegate all work to OpenClaw
+  };
 }
 
 export interface ToolConfig {
@@ -79,5 +85,10 @@ export const DEFAULT_CONFIG: AgentConfig = {
     activeHoursUtc: "00:00-23:59",
     dailyTaskLimit: 100,
     dailyToolBudget: 500,
+  },
+  openclaw: {
+    gatewayUrl: "ws://127.0.0.1:18789",
+    gatewayToken: "",
+    enabled: true,
   },
 };
