@@ -31,6 +31,24 @@ export function loadTools(config: AgentConfig): void {
 
   registry.setDailyLimit(config.limits.dailyToolBudget);
 
+  // Auto-derive skills from enabled tools
+  const TOOL_SKILL_MAP: Record<string, string> = {
+    code_exec: "code-execution",
+    web_fetch: "web-research",
+    file_write: "file-generation",
+    gen_3d: "3d-generation",
+    gen_image: "image-generation",
+    gen_video: "video-generation",
+    gen_audio: "audio-generation",
+  };
+
+  for (const toolName of registry.listNames()) {
+    const skill = TOOL_SKILL_MAP[toolName];
+    if (skill && !config.agent.skills.includes(skill)) {
+      config.agent.skills.push(skill);
+    }
+  }
+
   console.log(`[tools] loaded ${registry.listNames().length} tools: ${registry.listNames().join(", ")}`);
 }
 
