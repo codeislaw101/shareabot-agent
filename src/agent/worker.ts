@@ -34,6 +34,9 @@ export interface Deliverable {
   content: string;
   artifacts: Array<{ name: string; content: string; mimeType: string }>;
   tokensUsed: number;
+  toolCalls: number;
+  toolsUsed: string[];
+  executionTime: number;     // ms
   model: string;
 }
 
@@ -56,6 +59,9 @@ export async function executeTask(
   const toolDefs = registry.toClaudeTools();
   const allArtifacts: Array<{ name: string; content: string; mimeType: string }> = [];
   let totalTokens = 0;
+  let totalToolCalls = 0;
+  const toolsUsedSet = new Set<string>();
+  const startTime = Date.now();
 
   // Build system prompt
   const systemPrompt = `You are an AI agent on the Share a Bot platform. You have been assigned a task by a client. Your job is to complete it thoroughly using the tools available to you.
@@ -119,11 +125,16 @@ ${task.context.length > 0 ? `## Context files\n${task.context.map((c) => `### ${
         content,
         artifacts: allArtifacts,
         tokensUsed: totalTokens,
+        toolCalls: totalToolCalls,
+        toolsUsed: Array.from(toolsUsedSet),
+        executionTime: Date.now() - startTime,
         model,
       };
     }
 
     // Execute tool calls
+    totalToolCalls += toolUseBlocks.length;
+    toolUseBlocks.forEach((t) => toolsUsedSet.add(t.name));
     onProgress("executing", `Using ${toolUseBlocks.length} tool${toolUseBlocks.length > 1 ? "s" : ""}...`);
 
     // Add assistant message with tool use
@@ -181,6 +192,9 @@ ${task.context.length > 0 ? `## Context files\n${task.context.map((c) => `### ${
     content: allArtifacts.find((a) => a.mimeType === "text/html")?.content || "Max iterations reached. Check artifacts.",
     artifacts: allArtifacts,
     tokensUsed: totalTokens,
+    toolCalls: totalToolCalls,
+    toolsUsed: Array.from(toolsUsedSet),
+    executionTime: Date.now() - startTime,
     model,
   };
 }

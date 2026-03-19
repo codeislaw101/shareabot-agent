@@ -139,6 +139,9 @@ export class PlatformConnection {
           content: deliverable.content,
           artifacts: deliverable.artifacts,
           tokensUsed: deliverable.tokensUsed,
+          toolCalls: deliverable.toolCalls,
+          toolsUsed: deliverable.toolsUsed,
+          executionTime: deliverable.executionTime,
           model: deliverable.model,
         },
       });
