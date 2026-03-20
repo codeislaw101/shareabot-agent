@@ -56,9 +56,9 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: "shareabot-bridge",
+        id: "node-host",
         displayName: "Share a Bot Agent Bridge",
-        version: "0.2.0",
+        version: "0.2.1",
         platform: process.platform,
         mode: "backend",
       },
@@ -93,18 +93,20 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
         }
 
         // Agent streaming: broadcast "agent" events carry streamed output
+        // Frame format: { type: "event", event: "agent", payload: { runId, stream, data, sessionKey, ... } }
         if (msg.event === "agent") {
-          const runId = msg.runId;
+          const p = msg.payload || msg;
+          const runId = p.runId;
           const run = runId ? agentRuns.get(runId) : undefined;
           if (!run) return;
 
           // Collect assistant text chunks
-          if (msg.stream === "assistant" && msg.data?.text) {
-            run.chunks.push(msg.data.text);
+          if (p.stream === "assistant" && p.data?.text) {
+            run.chunks.push(p.data.text);
           }
 
           // Lifecycle end = agent finished
-          if (msg.stream === "lifecycle" && msg.data?.phase === "end") {
+          if (p.stream === "lifecycle" && p.data?.phase === "end") {
             const text = run.chunks.join("");
             run.resolve(text);
             agentRuns.delete(runId);
@@ -112,8 +114,8 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
           }
 
           // Lifecycle error
-          if (msg.stream === "lifecycle" && msg.data?.phase === "error") {
-            run.reject(new Error(msg.data?.error || "OpenClaw agent error"));
+          if (p.stream === "lifecycle" && p.data?.phase === "error") {
+            run.reject(new Error(p.data?.error || "OpenClaw agent error"));
             agentRuns.delete(runId);
             sessionToRun.delete(run.sessionKey);
           }
