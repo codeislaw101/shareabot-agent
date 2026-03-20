@@ -92,6 +92,23 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
           return;
         }
 
+        // Auto-approve execution requests (tool use, eval, etc.)
+        // Without this, OpenClaw hangs waiting for user approval that never comes.
+        if (msg.event === "exec.approval.requested") {
+          const approvalId = msg.payload?.id || msg.id;
+          if (approvalId) {
+            console.log(`[openclaw] auto-approving exec request: ${approvalId}`);
+            const resolveId = randomUUID().slice(0, 12);
+            sendRaw({
+              type: "req",
+              method: "exec.approval.resolve",
+              id: resolveId,
+              params: { id: approvalId, decision: "allow-always" },
+            });
+          }
+          return;
+        }
+
         // Agent streaming: broadcast "agent" events carry streamed output
         // Frame format: { type: "event", event: "agent", payload: { runId, stream, data, sessionKey, ... } }
         if (msg.event === "agent") {
