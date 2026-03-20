@@ -161,12 +161,12 @@ export class PlatformConnection {
 
       if (this.openclawBridge && this.openclawBridge.isConnected()) {
         // ── OpenClaw mode: delegate to local OpenClaw instance ──
-        sendProgress("thinking", "Sending to OpenClaw...");
+        sendProgress("thinking", "Analyzing task...");
 
         const prompt = task.description +
           (task.context.length > 0 ? "\n\nContext:\n" + task.context.map(c => `${c.name}: ${c.content}`).join("\n") : "");
 
-        sendProgress("executing", "OpenClaw is working...");
+        sendProgress("executing", "Working on it...");
         const response = await this.openclawBridge.send(prompt, `task-${taskId}`);
 
         // Package OpenClaw's response as a deliverable

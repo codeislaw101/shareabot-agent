@@ -1,12 +1,12 @@
 /**
  * OpenClaw Bridge — connects local OpenClaw instance to Share a Bot marketplace.
  *
- * Implements the OpenClaw gateway protocol:
- *   1. Connect WS
- *   2. Send "connect" request with auth token
- *   3. Handle "connect.challenge" — resend with nonce
- *   4. Receive hello.ok — authenticated
- *   5. Forward tasks as "agent.run" requests
+ * Implements the OpenClaw gateway protocol v3:
+ *   1. Connect WS with auth
+ *   2. Handle "connect.challenge" — resend with nonce
+ *   3. Receive hello-ok — authenticated
+ *   4. Forward tasks as "agent" requests (with idempotencyKey)
+ *   5. Collect streamed "agent" events (assistant text + lifecycle end)
  */
 
 import WebSocket from "ws";
@@ -26,20 +26,23 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
 
   let ws: WebSocket | null = null;
   let authenticated = false;
-  let connectNonce: string | null = null;
 
-  // Pending request/response tracking
+  // Pending request/response tracking (by request id)
   const pending = new Map<string, {
     resolve: (value: any) => void;
     reject: (error: Error) => void;
   }>();
 
-  // Pending agent responses (streamed)
-  const agentResponses = new Map<string, {
+  // Pending agent runs — keyed by runId, accumulates streamed text
+  const agentRuns = new Map<string, {
     resolve: (value: string) => void;
     reject: (error: Error) => void;
     chunks: string[];
+    sessionKey: string;
   }>();
+
+  // Map sessionKey → runId (set when first "accepted" response arrives)
+  const sessionToRun = new Map<string, string>();
 
   function sendRaw(data: unknown) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -53,9 +56,9 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
       minProtocol: 3,
       maxProtocol: 3,
       client: {
-        id: "node-host",
+        id: "shareabot-bridge",
         displayName: "Share a Bot Agent Bridge",
-        version: "0.1.0",
+        version: "0.2.0",
         platform: process.platform,
         mode: "backend",
       },
@@ -66,9 +69,8 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
 
     sendRaw({ type: "req", method: "connect", id, params });
 
-    // Track the connect response
     pending.set(id, {
-      resolve: (payload) => {
+      resolve: () => {
         authenticated = true;
         console.log("[openclaw] authenticated with gateway");
       },
@@ -82,65 +84,103 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
     try {
       const msg = JSON.parse(raw);
 
-      // Event frame
+      // ── Event frames ──
       if (msg.type === "event") {
         if (msg.event === "connect.challenge") {
-          // Challenge-response: save nonce and resend connect
-          connectNonce = msg.payload?.nonce || null;
-          if (connectNonce) {
-            console.log("[openclaw] received challenge, sending auth...");
-            sendConnect();
-          }
+          console.log("[openclaw] received challenge, sending auth...");
+          sendConnect();
           return;
         }
 
-        // Agent streaming events
-        if (msg.event === "agent.delta" || msg.event === "message.delta") {
-          const sessionKey = msg.sessionKey || msg.meta?.sessionKey;
-          if (sessionKey) {
-            const resp = agentResponses.get(sessionKey);
-            if (resp && msg.text) resp.chunks.push(msg.text);
-          }
-        }
+        // Agent streaming: broadcast "agent" events carry streamed output
+        if (msg.event === "agent") {
+          const runId = msg.runId;
+          const run = runId ? agentRuns.get(runId) : undefined;
+          if (!run) return;
 
-        if (msg.event === "agent.end" || msg.event === "message.end") {
-          const sessionKey = msg.sessionKey || msg.meta?.sessionKey;
-          if (sessionKey) {
-            const resp = agentResponses.get(sessionKey);
-            if (resp) {
-              const text = msg.text || msg.content || resp.chunks.join("");
-              resp.resolve(text);
-              agentResponses.delete(sessionKey);
-            }
+          // Collect assistant text chunks
+          if (msg.stream === "assistant" && msg.data?.text) {
+            run.chunks.push(msg.data.text);
+          }
+
+          // Lifecycle end = agent finished
+          if (msg.stream === "lifecycle" && msg.data?.phase === "end") {
+            const text = run.chunks.join("");
+            run.resolve(text);
+            agentRuns.delete(runId);
+            sessionToRun.delete(run.sessionKey);
+          }
+
+          // Lifecycle error
+          if (msg.stream === "lifecycle" && msg.data?.phase === "error") {
+            run.reject(new Error(msg.data?.error || "OpenClaw agent error"));
+            agentRuns.delete(runId);
+            sessionToRun.delete(run.sessionKey);
           }
         }
         return;
       }
 
-      // Response frame (type: "res" in OpenClaw protocol)
-      if (msg.type === "res" || msg.type === "response" || (msg.id && msg.ok !== undefined)) {
+      // ── Response frames ──
+      if (msg.type === "res" || (msg.id && msg.ok !== undefined)) {
         const p = pending.get(msg.id);
-        if (p) {
-          pending.delete(msg.id);
-          if (msg.ok !== false) {
-            p.resolve(msg.payload || msg.result || msg);
-          } else {
-            p.reject(new Error(msg.error?.message || "gateway error"));
+
+        if (msg.ok === false) {
+          // Error response
+          const err = new Error(msg.error?.message || "gateway error");
+          if (p) { pending.delete(msg.id); p.reject(err); }
+          return;
+        }
+
+        const payload = msg.payload || msg.result || {};
+
+        // First response: "accepted" — register the runId for streaming
+        if (payload.status === "accepted" && payload.runId) {
+          const runId = payload.runId;
+          // Find the agentRun by matching the request id → sessionKey
+          // The pending handler was set up in send() to link these
+          if (p) {
+            pending.delete(msg.id);
+            p.resolve(payload); // triggers the runId linking in send()
           }
           return;
         }
 
-        // Could be an agent response (non-streaming)
-        if (msg.payload?.text || msg.payload?.content || msg.result) {
-          const sessionKey = msg.meta?.sessionKey || msg.id;
-          const resp = agentResponses.get(sessionKey);
-          if (resp) {
-            resp.resolve(msg.payload?.text || msg.payload?.content || JSON.stringify(msg.result));
-            agentResponses.delete(sessionKey);
+        // Second response: "completed" — agent finished (non-streaming or final)
+        if (payload.status === "completed" && payload.runId) {
+          const run = agentRuns.get(payload.runId);
+          if (run) {
+            const text = payload.result?.text || payload.result?.content ||
+              run.chunks.join("") || JSON.stringify(payload.result || {});
+            run.resolve(text);
+            agentRuns.delete(payload.runId);
+            sessionToRun.delete(run.sessionKey);
           }
+          if (p) { pending.delete(msg.id); }
+          return;
+        }
+
+        // Second response: "error"
+        if (payload.status === "error" && payload.runId) {
+          const run = agentRuns.get(payload.runId);
+          if (run) {
+            run.reject(new Error(payload.summary || "OpenClaw agent error"));
+            agentRuns.delete(payload.runId);
+            sessionToRun.delete(run.sessionKey);
+          }
+          if (p) { pending.delete(msg.id); }
+          return;
+        }
+
+        // Generic response (e.g. connect hello-ok)
+        if (p) {
+          pending.delete(msg.id);
+          p.resolve(payload);
         }
       }
-    } catch {}
+    } catch (err) {
+      console.error("[openclaw] failed to parse message:", err);
+    }
   }
 
   function connect(): Promise<void> {
@@ -156,8 +196,6 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
 
       ws.on("open", () => {
         console.log(`[openclaw] connected to ${gatewayUrl}`);
-        // Start the connect handshake
-        connectNonce = null;
         sendConnect();
       });
 
@@ -173,17 +211,15 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
         authenticated = false;
         const r = reason?.toString() || "";
         console.log(`[openclaw] disconnected: ${code} ${r}`);
-        // Reject all pending
-        for (const [id, p] of pending) {
-          p.reject(new Error("disconnected"));
-          pending.delete(id);
+        for (const [, p] of pending) p.reject(new Error("disconnected"));
+        pending.clear();
+        for (const [, run] of agentRuns) {
+          const partial = run.chunks.join("");
+          if (partial) run.resolve(partial);
+          else run.reject(new Error("disconnected"));
         }
-        for (const [id, p] of agentResponses) {
-          const partial = p.chunks.join("");
-          if (partial) p.resolve(partial);
-          else p.reject(new Error("disconnected"));
-          agentResponses.delete(id);
-        }
+        agentRuns.clear();
+        sessionToRun.clear();
       });
 
       ws.on("error", (err) => {
@@ -199,47 +235,50 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
 
     const id = randomUUID().slice(0, 12);
     const sessionKey = `shareabot:${sessionId || id}`;
+    const idempotencyKey = randomUUID();
 
     return new Promise((resolve, reject) => {
-      agentResponses.set(sessionKey, { resolve, reject, chunks: [] });
+      // Pre-register the agentRun with a placeholder runId (will be set on "accepted")
+      const runPlaceholder = { resolve, reject, chunks: [] as string[], sessionKey };
 
-      // Also track as a regular request in case it returns non-streamed
+      // Track the initial request to get the runId from the "accepted" response
       pending.set(id, {
         resolve: (payload) => {
-          const text = payload?.text || payload?.content || JSON.stringify(payload);
-          if (agentResponses.has(sessionKey)) {
-            agentResponses.get(sessionKey)!.resolve(text);
-            agentResponses.delete(sessionKey);
+          if (payload.runId) {
+            agentRuns.set(payload.runId, runPlaceholder);
+            sessionToRun.set(sessionKey, payload.runId);
+            console.log(`[openclaw] agent run ${payload.runId} accepted for session ${sessionKey}`);
+          } else {
+            // No runId — treat as immediate response
+            const text = payload?.text || payload?.content || JSON.stringify(payload);
+            resolve(text);
           }
         },
-        reject: (err) => {
-          if (agentResponses.has(sessionKey)) {
-            agentResponses.get(sessionKey)!.reject(err);
-            agentResponses.delete(sessionKey);
-          }
-        },
+        reject,
       });
 
       sendRaw({
         type: "req",
-        method: "agent.run",
+        method: "agent",
         id,
         params: {
           message,
           sessionKey,
-          stream: true,
+          idempotencyKey,
         },
       });
 
       // Timeout
       const timeout = (config.security?.maxTimeSeconds || 300) * 1000;
       setTimeout(() => {
-        if (agentResponses.has(sessionKey)) {
-          const resp = agentResponses.get(sessionKey)!;
-          const partial = resp.chunks.join("");
-          if (partial) resp.resolve(partial);
-          else resp.reject(new Error("OpenClaw response timed out"));
-          agentResponses.delete(sessionKey);
+        const runId = sessionToRun.get(sessionKey);
+        const run = runId ? agentRuns.get(runId) : undefined;
+        if (run) {
+          const partial = run.chunks.join("");
+          if (partial) run.resolve(partial);
+          else run.reject(new Error("OpenClaw response timed out"));
+          agentRuns.delete(runId!);
+          sessionToRun.delete(sessionKey);
         }
         pending.delete(id);
       }, timeout);
@@ -247,8 +286,6 @@ export async function connectToOpenClaw(config: AgentConfig): Promise<OpenClawCo
   }
 
   async function getSkills(): Promise<string[]> {
-    // OpenClaw skills are discovered through the config/agent setup
-    // For now return empty — skills come from the agent's config
     return [];
   }
 
